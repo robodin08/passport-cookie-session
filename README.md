@@ -42,7 +42,13 @@ app.use(passport.session());
 // Define your Passport strategy here, e.g.:
 // passport.use(new SomeStrategy(...));
 
-passport.serializeUser((user, done) => done(null, user));
+// ⚠️ Important: Only store minimal data in the session (e.g., user ID).
+// Since it's saved in an encrypted cookie, storing too much will increase cookie size
+// and slow down every request, including static file requests.
+
+passport.serializeUser((user, done) => {
+  done(null, { id: user.id, username: user.username }); // Avoid saving the full user object
+});
 passport.deserializeUser((user, done) => done(null, user));
 
 // Middleware to check if authenticated
