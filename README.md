@@ -91,7 +91,9 @@ app.listen(3000, () => {
 Creates Express middleware for encrypted cookie sessions.
 
 - options.name (string) – Cookie name (default: 'session').
-- options.keys (string[]) – Array of secret keys. The first key is used to encrypt new cookies; others can decrypt existing cookies (supports key rotation).
+- options.keys (string[]) – Array of secret keys used for encryption and decryption.  
+  The first key is used to encrypt new cookies and also to decrypt them;  
+  the remaining keys are only used to decrypt older cookies (supports key rotation).
 - options.cookie (object) – Cookie options (see https://github.com/jshttp/cookie#options):
 
   - path (default '/')
