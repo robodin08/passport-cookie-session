@@ -16,7 +16,7 @@ function decrypt(encryptedBase64, secret) {
   const b = Buffer.from(encryptedBase64, 'base64');
   const iv = b.subarray(0, 12);
   const tag = b.subarray(12, 28);
-  const encrypted = b.slice(28);
+  const encrypted = b.subarray(28);
 
   const key = crypto.createHash('sha256').update(secret).digest();
 
@@ -73,7 +73,6 @@ function validateOptions(options) {
     throw new TypeError('`cookie.maxAge` must be a number (in seconds).');
   }
 }
-
 function passportCookieSession(options = {}) {
   validateOptions(options);
 
@@ -107,9 +106,18 @@ function passportCookieSession(options = {}) {
       for (const decryptKey of keys) {
         try {
           const decrypted = decrypt(raw, decryptKey);
-          sessionData = JSON.parse(decrypted);
-          break;
-        } catch (_) {}
+          const envelope = JSON.parse(decrypted);
+
+          // Check expiration
+          if (!envelope.expireAt || Date.now() > envelope.expireAt) { 
+            // Expired
+            sessionData = {};
+          } else {
+            // valid session, expose only inner data
+            sessionData = envelope.data || {};
+          }
+          break; // exit loop on successful decrypt
+        } catch (_) { }
       }
     }
 
@@ -117,7 +125,13 @@ function passportCookieSession(options = {}) {
 
     req.session.save = function (cb) {
       try {
-        const encrypted = encrypt(JSON.stringify(req.session), signingKey);
+        const envelope = {
+          data: req.session,
+          expireAt: this._expireAt || (Date.now() + (cookieOptions.maxAge * 1000))
+        };
+        this._expireAt = envelope.expireAt;
+
+        const encrypted = encrypt(JSON.stringify(envelope), signingKey);
         res.setHeader('Set-Cookie', cookie.serialize(name, encrypted, cookieOptions));
         cb && cb();
       } catch (err) {
