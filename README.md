@@ -16,11 +16,14 @@ This package stores session data directly in an encrypted cookie, eliminating th
 
 ## Installation
 
+```bash
 npm install passport-cookie-session
+```
 
 ## Usage
 
-```const express = require('express');
+```js
+const express = require('express');
 const passport = require('passport');
 const passportCookieSession = require('passport-cookie-session');
 const app = express();
