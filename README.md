@@ -1,5 +1,7 @@
 # passport-cookie-session
 
+[![npm version](https://img.shields.io/npm/v/passport-cookie-session.svg)](https://www.npmjs.com/package/passport-cookie-session)
+
 A simple Express middleware to manage encrypted cookie sessions, designed to work seamlessly with Passport.js authentication.
 
 This package stores session data directly in an encrypted cookie, eliminating the need for a server-side session store.
