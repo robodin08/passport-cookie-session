@@ -13,10 +13,10 @@ function encrypt(data, secret) {
 }
 
 function decrypt(encryptedBase64, secret) {
-  const b = Buffer.from(encryptedBase64, 'base64');
-  const iv = b.subarray(0, 12);
-  const tag = b.subarray(12, 28);
-  const encrypted = b.subarray(28);
+  const buffer = Buffer.from(encryptedBase64, 'base64');
+  const iv = buffer.subarray(0, 12);
+  const tag = buffer.subarray(12, 28);
+  const encrypted = buffer.subarray(28);
 
   const key = crypto.createHash('sha256').update(secret).digest();
 
@@ -27,12 +27,12 @@ function decrypt(encryptedBase64, secret) {
   return decrypted.toString('utf8');
 }
 
-// --- Validation function ---
 function validateOptions(options) {
   const {
     name = 'session',
     keys,
     cookie: userCookieOptions = {},
+    maxCookieSize = 4096
   } = options;
 
   if (!Array.isArray(keys) || keys.length === 0 || !keys.every(k => typeof k === 'string' && k.length > 0)) {
@@ -43,12 +43,15 @@ function validateOptions(options) {
     throw new TypeError('`name` must be a non-empty string.');
   }
 
+  if (typeof maxCookieSize !== 'number' || maxCookieSize <= 0) {
+    throw new TypeError('`maxCookieSize` must be a number (in bytes).');
+  }
+
   if (typeof userCookieOptions !== 'object') {
     throw new TypeError('`cookie` option must be an object.');
   }
 
   const allowedSameSite = ['lax', 'strict', 'none'];
-
   if ('sameSite' in userCookieOptions && !allowedSameSite.includes(userCookieOptions.sameSite)) {
     throw new TypeError('`cookie.sameSite` must be one of: "lax", "strict", or "none".');
   }
@@ -73,6 +76,7 @@ function validateOptions(options) {
     throw new TypeError('`cookie.maxAge` must be a number (in seconds).');
   }
 }
+
 function passportCookieSession(options = {}) {
   validateOptions(options);
 
@@ -80,6 +84,7 @@ function passportCookieSession(options = {}) {
     name = 'session',
     keys,
     cookie: userCookieOptions = {},
+    maxCookieSize = 4096,
   } = options;
 
   const [signingKey] = keys;
@@ -100,39 +105,60 @@ function passportCookieSession(options = {}) {
   return function (req, res, next) {
     const cookies = cookie.parse(req.headers.cookie || '');
     const raw = cookies[name];
-    let sessionData = {};
+    let session = {
+      cookie: {
+        path: cookieOptions.path,
+        httpOnly: cookieOptions.httpOnly,
+        secure: cookieOptions.secure,
+        sameSite: cookieOptions.sameSite,
+        originalMaxAge: cookieOptions.maxAge * 1000,
+        _expires: null,
+      }
+    };
+    let internalExpireAt = null;
 
     if (raw) {
       for (const decryptKey of keys) {
         try {
           const decrypted = decrypt(raw, decryptKey);
           const envelope = JSON.parse(decrypted);
-
-          // Check expiration
-          if (!envelope.expireAt || Date.now() > envelope.expireAt) { 
-            // Expired
-            sessionData = {};
-          } else {
-            // valid session, expose only inner data
-            sessionData = envelope.data || {};
-          }
-          break; // exit loop on successful decrypt
+          if (Date.now() > envelope.expireAt) break;
+          session = {
+            ...envelope.data,
+            cookie: session.cookie,
+          };
+          session.cookie._expires = new Date(envelope.expireAt);
+          internalExpireAt = envelope.expireAt;
+          break;
         } catch (_) { }
       }
     }
 
-    req.session = sessionData;
+    // Add save/regenerate
+    req.session = session;
 
     req.session.save = function (cb) {
       try {
+        internalExpireAt = internalExpireAt || (Date.now() + (cookieOptions.maxAge * 1000));
         const envelope = {
-          data: req.session,
-          expireAt: this._expireAt || (Date.now() + (cookieOptions.maxAge * 1000))
+          data: { ...req.session },
+          expireAt: internalExpireAt,
         };
-        this._expireAt = envelope.expireAt;
+        delete envelope.data.cookie;
 
         const encrypted = encrypt(JSON.stringify(envelope), signingKey);
-        res.setHeader('Set-Cookie', cookie.serialize(name, encrypted, cookieOptions));
+
+        const cookieSize = Buffer.byteLength(encrypted, 'utf8');
+        if (cookieSize > maxCookieSize) {
+          throw new Error(`Cookie size too large: ${cookieSize} bytes. Max is ${maxCookieSize} bytes.`);
+        }
+
+        const setCookie = cookie.serialize(name, encrypted, {
+          ...cookieOptions,
+          expires: new Date(internalExpireAt),
+        });
+
+        res.setHeader('Set-Cookie', setCookie);
         cb && cb();
       } catch (err) {
         cb && cb(err);
@@ -140,17 +166,12 @@ function passportCookieSession(options = {}) {
     };
 
     req.session.regenerate = function (cb) {
-      req.session = {};
+      req.session = {
+        cookie: session.cookie,
+      };
       req.session.save = this.save;
       req.session.regenerate = this.regenerate;
       cb && cb();
-    };
-
-    const _end = res.end;
-    res.end = function (...args) {
-      req.session.save(() => {
-        _end.apply(res, args);
-      });
     };
 
     next();
