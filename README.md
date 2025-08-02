@@ -2,17 +2,17 @@
 
 [![npm version](https://img.shields.io/npm/v/passport-cookie-session.svg)](https://www.npmjs.com/package/passport-cookie-session)
 
-A simple Express middleware to manage encrypted cookie sessions, designed to work seamlessly with Passport.js authentication.
+A simple Express middleware to manage encrypted cookie sessions, **specially designed to work seamlessly with [Passport.js](https://www.passportjs.org) authentication**.
 
 This package stores session data directly in an encrypted cookie, eliminating the need for a server-side session store.
 
 ## Features
 
-- Encrypts session data in cookies using AES-256-GCM.
+- Encrypts session data in cookies using custom encryption (or AES-256-GCM with a plugin).
 - Supports multiple keys for key rotation.
-- Fully compatible with Passport.js.
+- **Built specifically for Passport.js integration.**
 - Configurable cookie options (`httpOnly`, `secure`, `sameSite`, etc).
-- Minimal and easy to integrate with Express apps.
+- Lightweight and stateless.
 
 ## Installation
 
@@ -29,90 +29,99 @@ const passportCookieSession = require('passport-cookie-session');
 const app = express();
 
 app.use(passportCookieSession({
-  name: 'auth',
-  keys: ['super-secret-key', 'old-key'], // First key encrypts new cookies
-  cookie: {
-    httpOnly: true,
-    secure: false,        // Set to true on production with HTTPS
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 60 * 60,      // 1 hour in seconds
-    // domain: 'example.com' // Optional: restrict cookie to a specific domain
-  }
+    name: 'auth', // Optional. Default: 'session'
+    keys: ['super-secret-key', 'old-key'], // Required. First key is used for encryption. Others are for decryption only.
+
+    cookie: {
+        httpOnly: true,      // Optional. Default: true
+        secure: false,       // Optional. Default: false
+        sameSite: 'lax',     // Optional. Default: 'lax'
+        path: '/',           // Optional. Default: '/'
+        maxAge: 60 * 60,     // Optional. Default: 24 * 60 * 60 (1 day)
+        // domain: 'example.com' // Optional. Default: current domain
+    },
+
+    maxCookieSize: 4096,  // Optional. Default is 4096 bytes, must not exceed browser limits
+
+    // Optional encryption function (must use callback, not async/await, NOT secure!)  
+    // If not provided, default encryption uses AES-256-GCM with random IV and SHA-256 hashed key
+    encrypt: function (data, signingKey, cb) {
+        try {
+            const secretChars = signingKey.split('').map(c => c.charCodeAt(0));
+            const textChars = data.split('').map(c => c.charCodeAt(0));
+            const encryptedChars = textChars.map((ch, i) => ch ^ secretChars[i % secretChars.length]);
+            const result = Buffer.from(encryptedChars).toString('base64');
+            cb(null, result);
+        } catch (err) {
+            cb(err);
+        }
+    },
+
+    // Optional encryption function (must use callback, not async/await, NOT secure!)  
+    // If not provided, default encryption uses AES-256-GCM with random IV and SHA-256 hashed key
+    decrypt: function (data, signingKey, cb) {
+        try {
+            const secretChars = signingKey.split('').map(c => c.charCodeAt(0));
+            const encryptedChars = Buffer.from(data, 'base64');
+            const decryptedChars = [...encryptedChars].map((ch, i) => ch ^ secretChars[i % secretChars.length]);
+            const result = String.fromCharCode(...decryptedChars);
+            cb(null, result);
+        } catch (err) {
+            cb(err);
+        }
+    }
 }));
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Define your Passport strategy here, e.g.:
-// passport.use(new SomeStrategy(...));
+// You must add and configure a Passport strategy for authentication, e.g.:
+// passport.use(new LocalStrategy(...));
 
-// ⚠️ Important: Only store minimal data in the session (e.g., user ID).
-// Since it's saved in an encrypted cookie, storing too much will increase cookie size
-// and slow down every request, including static file requests.
-
+// Example serialization/deserialization
 passport.serializeUser((user, done) => {
-  done(null, { id: user.id, username: user.username }); // Avoid saving the full user object
+  done(null, { id: user.id, username: user.username });
 });
 passport.deserializeUser((user, done) => done(null, user));
-
-// Middleware to check if authenticated
-const ensureAuth = (req, res, next) => {
-  if (req.isAuthenticated()) return next();
-  res.redirect('/login');
-};
-
-// Example routes
-app.get('/', (req, res) => {
-  res.send('<a href="/login">Login</a>');
-});
-
-app.get('/login', passport.authenticate('some-strategy'));
-
-app.get('/profile', ensureAuth, (req, res) => {
-  res.send(`
-    <h1>Welcome ${req.user.username}</h1>
-    <p>ID: ${req.user.id}</p>
-    <p><a href="/logout">Logout</a></p>
-  `);
-});
-
-app.get('/logout', (req, res, next) => {
-  req.logout(err => {
-    if (err) return next(err);
-    res.redirect('/');
-  });
-});
-
-app.listen(3000, () => {
-  console.log('Server running at http://localhost:3000');
-});
 ```
 
 ## API
 
-### passportCookieSession(options)
+### passport-cookie-session(options)
 
 Creates Express middleware for encrypted cookie sessions.
 
-- options.name (string) – Cookie name (default: 'session').
-- options.keys (string[]) – Array of secret keys used for encryption and decryption.  
-  The first key is used to encrypt new cookies and also to decrypt them;  
-  the remaining keys are only used to decrypt older cookies (supports key rotation).
-- options.cookie (object) – Cookie options (see https://github.com/jshttp/cookie#options):
+Options:
 
-  - path (default '/')
-  - httpOnly (default true)
-  - secure (default false)
-  - sameSite (default 'lax')
-  - maxAge (in seconds, default 86400)
-  - domain (optional)
+- `name` (string) – Cookie name (default: 'session')
+
+- `keys` (string[]) – Array of secret keys:
+  - The first key is used for encryption + decryption.
+  - The rest are for decryption only (support key rotation).
+
+- `cookie` (object) – Cookie options (see cookie npm docs):
+  - `path` (default '/')
+  - `httpOnly` (default true)
+  - `secure` (default false)
+  - `sameSite` (default 'lax')
+  - `maxAge` (in seconds; default 86400)
+  - `domain` (optional)
+
+- `maxCookieSize` (number) – Optional. Maximum allowed cookie size in bytes. Default is 4096.  
+  Make sure this stays within browser limits (usually 4096 bytes).  
+  If the encrypted session exceeds this size, it will be rejected.
+
+- `encrypt(data, key, cb)` (function) – Optional. Custom encryption function with callback.
+
+- `decrypt(encrypted, key, cb)` (function) – Optional. Custom decryption function with callback.
 
 ## Security Notes
 
-- In production, always serve your app over HTTPS and set secure: true in cookie options.
-- Rotate your encryption keys regularly by providing multiple keys in keys.
-- Sessions are encrypted and authenticated using AES-256-GCM for confidentiality and integrity.
+- Always use HTTPS in production and set secure: true.
+- Rotate keys by adding new keys at the start of the keys array.
+- Custom encrypt/decrypt should be cryptographically secure in real applications.
+- Avoid storing large or sensitive data in the session cookie — keep payload minimal (e.g., user ID).
+- Pay attention to the maxCookieSize to avoid cookie overflow and unexpected behavior.
 
 ## License
 
