@@ -1,37 +1,37 @@
 const withTimeout = require('./timeout');
 
-function checkEncryptionFunctions(encrypt, decrypt, key) {
+async function checkEncryptionFunctions(encrypt, decrypt, key, timeout) {
     const testData = { foo: "bar", date: Date.now() };
     const testDataString = JSON.stringify(testData);
 
-    withTimeout('encrypt', (cb) => encrypt(testDataString, key, cb), (encErr, encrypted) => {
-        if (encErr) {
-            console.error(`[Encryption Error] Failed to encrypt test data during initialization: ${encErr.message}`);
-            console.error('→ Please check your custom encrypt function implementation and ensure it calls the callback properly.');
-            return;
+    try {
+        // Attempt to encrypt within the timeout
+        const encrypted = await withTimeout("Encryption", encrypt, [testDataString, key], timeout);
+
+        // Attempt to decrypt within the timeout
+        const decrypted = await withTimeout("Decryption", decrypt, [encrypted, key], timeout);
+
+        try {
+            const parsed = JSON.parse(decrypted);
+
+            // Check if decrypted data matches the original test data
+            if (parsed.foo !== testData.foo || typeof parsed.date !== 'number') {
+                console.error('[Data Mismatch] Decrypted data does not match the original test data.');
+                console.error('→ Verify that your encrypt and decrypt functions correctly preserve data integrity.');
+                throw new Error('Decrypted data integrity check failed.');
+            } else {
+                console.log('[Success] Encryption and decryption test passed. Custom functions work correctly.');
+            }
+        } catch (parseError) {
+            console.error(`[JSON Parse Error] Unable to parse decrypted data: ${parseError.message}`);
+            console.error('→ Decrypted output might be corrupted or invalid JSON. Check your decrypt function.');
+            throw new Error('Failed to parse decrypted data.');
         }
-
-        withTimeout('decrypt', (cb) => decrypt(encrypted, key, cb), (decErr, decrypted) => {
-            if (decErr) {
-                console.error(`[Decryption Error] Failed to decrypt test data during initialization: ${decErr.message}`);
-                console.error('→ Please check your custom decrypt function implementation and ensure it calls the callback properly.');
-                return;
-            }
-
-            try {
-                const parsed = JSON.parse(decrypted);
-                if (parsed.foo !== testData.foo || typeof parsed.date !== 'number') {
-                    console.error('[Data Mismatch] Decrypted data does not match the original test data.');
-                    console.error('→ Verify that your encrypt and decrypt functions correctly preserve data integrity.');
-                } else {
-                    // console.log('[Success] Encryption and decryption test passed. Custom functions work correctly.');
-                }
-            } catch (err) {
-                console.error(`[JSON Parse Error] Unable to parse decrypted data: ${err.message}`);
-                console.error('→ Decrypted output might be corrupted or invalid JSON. Check your decrypt function.');
-            }
-        });
-    });
+    } catch (error) {
+        console.error(`[Encryption/Decryption Check Error] ${error.message}`);
+        console.error('→ Please check your custom encrypt/decrypt function implementations and ensure they call the callback properly.');
+        throw error; // re-throw to allow calling code to handle
+    }
 }
 
 function validateOptions(options) {
@@ -42,6 +42,8 @@ function validateOptions(options) {
         maxCookieSize,
         encrypt,
         decrypt,
+        timeout,
+        checkEncryption,
     } = options;
 
     if (!Array.isArray(keys) || keys.length === 0 || !keys.every(k => typeof k === 'string' && k.length > 0)) {
@@ -62,11 +64,11 @@ function validateOptions(options) {
         if (typeof encrypt !== "function") {
             throw new TypeError('`encrypt` must be a function.');
         }
-        if (encrypt.constructor.name === 'AsyncFunction') {
-            throw new TypeError('`encrypt` must be synchronous and use a callback, not an async function.');
+        if (encrypt.constructor.name !== 'AsyncFunction') {
+            throw new TypeError('`encrypt` must be an async function (declared with `async`).');
         }
-        if (encrypt.length < 3) {
-            throw new TypeError('`encrypt` must accept at least 3 arguments: (data, signingKey, callback).');
+        if (encrypt.length < 2) {
+            throw new TypeError('`encrypt` must accept at least 3 arguments: (data, signingKey).');
         }
     }
 
@@ -74,11 +76,11 @@ function validateOptions(options) {
         if (typeof decrypt !== "function") {
             throw new TypeError('`decrypt` must be a function.');
         }
-        if (decrypt.constructor.name === 'AsyncFunction') {
-            throw new TypeError('`decrypt` must be synchronous and use a callback, not an async function.');
+        if (decrypt.constructor.name !== 'AsyncFunction') {
+            throw new TypeError('`decrypt` must be an async function (declared with `async`).');
         }
-        if (decrypt.length < 3) {
-            throw new TypeError('`decrypt` must accept at least 3 arguments: (data, signingKey, callback).');
+        if (decrypt.length < 2) {
+            throw new TypeError('`decrypt` must accept at least 3 arguments: (data, signingKey).');
         }
     }
 
@@ -127,6 +129,16 @@ function validateOptions(options) {
         if (typeof userCookieOptions.maxAge !== 'number' || !Number.isFinite(userCookieOptions.maxAge) || userCookieOptions.maxAge < 0) {
             throw new TypeError('`cookie.maxAge` must be a finite non-negative number (in seconds).');
         }
+    }
+
+    if (timeout !== undefined) {
+        if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout <= 0) {
+            throw new TypeError('`timeout` must be a finite positive number (in milliseconds).');
+        }
+    }
+
+    if (checkEncryption !== undefined && typeof checkEncryption !== 'boolean') {
+        throw new TypeError('`checkEncryption` must be a boolean.');
     }
 
     return Boolean(encrypt && decrypt);

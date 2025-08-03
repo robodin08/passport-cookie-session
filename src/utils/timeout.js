@@ -1,19 +1,18 @@
-function withTimeout(mode, fn, cb, timeoutMs = 5000) {
-  let called = false;
+async function withTimeout(mode, asyncFunc, args = [], timeout) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${mode} function timed out. Ensure you call the callback or return properly within ${timeout}ms.`));
+    }, timeout);
 
-  const timer = setTimeout(() => {
-    if (!called) {
-      called = true;
-      cb(new Error(`${mode} function timed out. Ensure you call the callback or return properly.`));
-    }
-  }, timeoutMs);
-
-  fn((...args) => {
-    if (!called) {
-      called = true;
-      clearTimeout(timer);
-      cb(...args);
-    }
+    asyncFunc(...args)
+      .then(result => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch(err => {
+        clearTimeout(timer);
+        reject(err);
+      });
   });
 }
 

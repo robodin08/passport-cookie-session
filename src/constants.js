@@ -12,5 +12,7 @@ module.exports = {
       sameSite: 'lax',
       maxAge: 24 * 60 * 60, // 1 day
     },
+    timout: 3000,
+    checkEncryption: false,
   },
 };

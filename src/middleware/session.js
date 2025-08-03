@@ -8,18 +8,30 @@ const { validateOptions, checkEncryptionFunctions } = require('../utils/validati
  * Creates a Passport-style cookie session middleware.
  * 
  * @param {Object} options - Configuration options.
- * @param {string} [options.name] - Cookie name.
+ * @param {string} [options.name] - Cookie name. Default is 'session'.
  * @param {string[]} options.keys - Array of secret keys for signing/encryption.
+ *        The first key is used for encryption; the rest are used for decryption (key rotation).
+ * 
  * @param {Object} [options.cookie] - Cookie options.
- * @param {boolean} [options.cookie.httpOnly] - HTTP-only cookie flag.
- * @param {boolean} [options.cookie.secure] - Secure cookie flag.
- * @param {'lax'|'strict'|'none'} [options.cookie.sameSite] - SameSite policy.
- * @param {string} [options.cookie.path] - Cookie path.
- * @param {string} [options.cookie.domain] - Cookie domain.
- * @param {number} [options.cookie.maxAge] - Cookie max age in seconds.
- * @param {number} [options.maxCookieSize] - Maximum allowed cookie size in bytes.
- * @param {function} [options.encrypt] - Custom encrypt function.
- * @param {function} [options.decrypt] - Custom decrypt function.
+ * @param {boolean} [options.cookie.httpOnly] - HTTP-only cookie flag. Default is true.
+ * @param {boolean} [options.cookie.secure] - Secure cookie flag. Default is false.
+ * @param {'lax'|'strict'|'none'} [options.cookie.sameSite] - SameSite policy. Default is 'lax'.
+ * @param {string} [options.cookie.path] - Cookie path. Default is '/'.
+ * @param {string} [options.cookie.domain] - Cookie domain. Default is current domain.
+ * @param {number} [options.cookie.maxAge] - Cookie max age in seconds. Default is 86400 (1 day).
+ * 
+ * @param {number} [options.maxCookieSize] - Maximum allowed cookie size in bytes. Default is 4096.
+ * 
+ * @param {function(string, string): Promise<string>} [options.encrypt] - 
+ *        Optional custom async function to encrypt string data using a signing key.
+ * @param {function(string, string): Promise<string>} [options.decrypt] - 
+ *        Optional custom async function to decrypt string data using a signing key.
+ * 
+ * @param {number} [options.timeout] - Timeout in milliseconds for encrypt/decrypt functions. Default is 3000.
+ * 
+ * @param {boolean} [options.checkEncryption] - 
+ *        If true, performs a startup check (in non-production environments) to verify 
+ *        that custom encrypt/decrypt functions can correctly round-trip test data. Default is false.
  * 
  * @returns {function} Express middleware function.
  */
@@ -32,16 +44,14 @@ function passportCookieSession(options = {}) {
         maxCookieSize = defaultOptions.maxCookieSize,
         encrypt = encryptPassport,
         decrypt = decryptPassport,
+        timeout = defaultOptions.timout,
+        checkEncryption = defaultOptions.checkEncryption,
     } = options;
 
     const [signingKey] = keys;
     const cookieOptions = { ...defaultOptions.cookie, ...userCookieOptions };
 
-    if (customEncryption) {
-        checkEncryptionFunctions(encrypt, decrypt, signingKey);
-    }
-
-    return function (req, res, next) {
+    return async function (req, res, next) {
         const cookies = cookie.parse(req.headers.cookie || '');
         const rawCookieValue = cookies[name];
 
@@ -51,29 +61,38 @@ function passportCookieSession(options = {}) {
         function finishSessionLoad() {
             req.session = session;
             req.session.save = function (cb) {
-                try {
-                    internalExpireAt ||= Date.now() + cookieOptions.maxAge * 1000;
-                    const envelope = { data: { ...req.session }, expireAt: internalExpireAt };
-
-                    withTimeout("Encryption", doneEncrypt => {
-                        encrypt(JSON.stringify(envelope), signingKey, doneEncrypt);
-                    }, (err, encrypted) => {
-                        if (err) return cb?.(err);
-                        const cookieString = cookie.serialize(name, encrypted, {
+                async function save() {
+                    if (!req.session?.passport || Object.keys(req.session?.passport).length === 0) {
+                        const expiredCookie = cookie.serialize(name, '', {
                             ...cookieOptions,
-                            expires: new Date(internalExpireAt),
+                            expires: new Date(0), // Expire immediately
                         });
-                        const encodedValue = encodeURIComponent(encrypted);
-                        const cookieSize = Buffer.byteLength(encodedValue, 'utf8');
-                        if (cookieSize > maxCookieSize) {
-                            return cb?.(new Error(`Cookie size exceeds limit: ${cookieSize} bytes.`));
-                        }
-                        res.setHeader('Set-Cookie', cookieString);
-                        cb?.();
+                        res.setHeader('Set-Cookie', expiredCookie);
+                        return;
+                    }
+
+                    internalExpireAt ||= Date.now() + cookieOptions.maxAge * 1000;
+                    const envelope = { data: { ...req.session?.passport }, expireAt: internalExpireAt };
+
+                    const encrypted = await withTimeout("Encryption", encrypt, [JSON.stringify(envelope), signingKey], timeout);
+
+                    const cookieString = cookie.serialize(name, encrypted, {
+                        ...cookieOptions,
+                        expires: new Date(internalExpireAt),
                     });
-                } catch (err) {
-                    cb?.(err);
+
+                    const encodedValue = encodeURIComponent(encrypted);
+                    const cookieSize = Buffer.byteLength(encodedValue, 'utf8');
+                    if (cookieSize > maxCookieSize) {
+                        throw new Error(`Cookie size exceeds limit: ${cookieSize} bytes.`);
+                    }
+
+                    res.setHeader('Set-Cookie', cookieString);
                 }
+
+                save()
+                    .then(() => cb?.())
+                    .catch(err => cb?.(err));
             };
 
             req.session.regenerate = function (cb) {
@@ -86,33 +105,29 @@ function passportCookieSession(options = {}) {
             next();
         }
 
-        if (!rawCookieValue) return finishSessionLoad();
-
-        let tried = 0;
-        function tryDecrypt() {
-            if (tried >= keys.length) return finishSessionLoad();
-            const decryptKey = keys[tried++];
-            withTimeout("Decryption", doneDecrypt => {
-                decrypt(rawCookieValue, decryptKey, doneDecrypt);
-            }, (err, decrypted) => {
-                if (!err) {
-                    try {
-                        const envelope = JSON.parse(decrypted);
-                        if (Date.now() > envelope.expireAt) return finishSessionLoad();
-                        session = { ...envelope.data, cookie: session.cookie };
-                        session.cookie._expires = new Date(envelope.expireAt);
-                        internalExpireAt = envelope.expireAt;
-                        return finishSessionLoad();
-                    } catch {
-                        tryDecrypt();
-                    }
-                } else {
-                    tryDecrypt();
-                }
-            });
+        if (customEncryption && checkEncryption) {
+            await checkEncryptionFunctions(encrypt, decrypt, signingKey, timeout);
         }
 
-        tryDecrypt();
+        if (!rawCookieValue) return finishSessionLoad();
+
+        for (const decryptKey of keys) {
+            try {
+                const decrypted = await withTimeout("Decryption", decrypt, [rawCookieValue, decryptKey], timeout);
+
+                const envelope = JSON.parse(decrypted);
+                if (Date.now() > envelope.expireAt) break;
+
+                session = { passport: { ...envelope.data } };
+                internalExpireAt = envelope.expireAt;
+                break;
+            } catch {
+                // Try next key
+                continue;
+            }
+        }
+
+        return finishSessionLoad();
     };
 }
 
