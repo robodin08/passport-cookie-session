@@ -1,6 +1,6 @@
 {
   "name": "passport-cookie-session",
-  "version": "0.0.4",
+  "version": "1.0.0",
   "description": "Encrypted, cookie-based session middleware compatible with PassportJS",
   "main": "src/index.js",
   "engines": {
