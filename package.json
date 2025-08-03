@@ -1,0 +1,30 @@
+{
+  "name": "passport-cookie-session",
+  "version": "0.0.4",
+  "description": "Encrypted, cookie-based session middleware compatible with PassportJS",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "passport",
+    "cookie",
+    "session",
+    "express",
+    "encryption"
+  ],
+  "author": "robodin08",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robodin08/passport-cookie-session.git"
+  },
+  "bugs": {
+    "url": "https://github.com/robodin08/passport-cookie-session/issues"
+  },
+  "homepage": "https://github.com/robodin08/passport-cookie-session#readme",
+  "license": "MIT",
+  "dependencies": {
+    "cookie": "^1.0.2",
+    "crypto": "^1.0.1"
+  }
+}
