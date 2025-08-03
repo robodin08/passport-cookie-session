@@ -1,6 +1,6 @@
 {
   "name": "passport-cookie-session",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Encrypted, cookie-based session middleware compatible with PassportJS",
   "main": "src/index.js",
   "engines": {
@@ -24,7 +24,6 @@
   "homepage": "https://github.com/robodin08/passport-cookie-session#readme",
   "license": "MIT",
   "dependencies": {
-    "cookie": "^1.0.2",
-    "crypto": "^1.0.1"
+    "cookie": "^1.0.2"
   }
 }
